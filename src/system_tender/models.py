@@ -17,6 +17,7 @@ class ToolName(str, Enum):
     FILE_READ = "file_read"
     FILE_WRITE = "file_write"
     HTTP_REQUEST = "http_request"
+    NOTIFY = "notify"
 
 
 class OutputFormat(str, Enum):
@@ -45,6 +46,8 @@ class TaskConfig(BaseModel):
     output_format: OutputFormat = OutputFormat.TEXT
     schedule: str | None = None  # cron-style: "0 6 * * *"
     env: dict[str, str] = Field(default_factory=dict)
+    network_access: bool = False
+    egress_allowlist: list[str] = Field(default_factory=list)
 
     @property
     def prompt_text(self) -> str:

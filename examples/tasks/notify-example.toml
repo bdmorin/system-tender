@@ -1,0 +1,14 @@
+[task]
+name = "uptime-notify"
+description = "Check system uptime and send a desktop notification with the result"
+allowed_tools = ["shell", "notify"]
+timeout = 60
+
+[task.prompt]
+text = """
+1. Run 'uptime' to check how long the system has been running.
+2. Send a notification with the title "System Uptime" and the uptime output as the message.
+"""
+
+[output]
+format = "text"

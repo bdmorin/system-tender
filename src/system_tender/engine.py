@@ -5,12 +5,16 @@ Runs the Anthropic client SDK tool-use loop with configurable tools.
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import logging
 import os
+import platform
 import shlex
+import shutil
 import subprocess
 import time
+import urllib.parse
 import urllib.request
 import urllib.error
 from datetime import datetime, timezone
@@ -29,6 +33,10 @@ from .models import (
 
 logger = logging.getLogger("system-tender")
 
+# Only env vars matching these prefixes are loaded from the .env file.
+# Prevents hijacking PATH, LD_PRELOAD, PYTHONPATH, etc.
+_ENV_ALLOWED_PREFIXES = ("ANTHROPIC_",)
+
 
 def _load_env(config_dir: Path) -> None:
     """Load .env file from config dir if ANTHROPIC_API_KEY not already set."""
@@ -37,6 +45,16 @@ def _load_env(config_dir: Path) -> None:
     env_file = config_dir / ".env"
     if not env_file.exists():
         return
+
+    # Warn if .env is readable by group/others
+    file_mode = env_file.stat().st_mode
+    if file_mode & 0o077:
+        logger.warning(
+            ".env file %s has overly permissive permissions (%o). "
+            "Recommend: chmod 600 %s",
+            env_file, file_mode & 0o777, env_file,
+        )
+
     for line in env_file.read_text().splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
@@ -45,8 +63,15 @@ def _load_env(config_dir: Path) -> None:
             key, _, value = line.partition("=")
             key = key.strip()
             value = value.strip().strip("'\"")
-            if key and value:
+            if not key or not value:
+                continue
+            if any(key.startswith(p) for p in _ENV_ALLOWED_PREFIXES):
                 os.environ[key] = value
+            else:
+                logger.warning(
+                    "Ignoring non-allowlisted env var in .env: %s",
+                    key,
+                )
     logger.debug("Loaded environment from %s", env_file)
 
 
@@ -157,6 +182,32 @@ TOOL_DEFINITIONS: dict[ToolName, dict[str, Any]] = {
             "required": ["url"],
         },
     },
+    ToolName.NOTIFY: {
+        "name": "notify",
+        "description": (
+            "Send a native system notification. "
+            "On macOS uses Notification Center, on Linux uses notify-send. "
+            "Use for alerting the user about task results, warnings, or completions."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "Notification title",
+                },
+                "message": {
+                    "type": "string",
+                    "description": "Notification body text",
+                },
+                "sound": {
+                    "type": "boolean",
+                    "description": "Play a sound with the notification (default: true, macOS only)",
+                },
+            },
+            "required": ["title", "message"],
+        },
+    },
 }
 
 # Map API tool names back to our ToolName enum
@@ -165,8 +216,12 @@ _TOOL_NAME_MAP = {defn["name"]: tool_name for tool_name, defn in TOOL_DEFINITION
 
 # --- Tool Execution ---
 
+MAX_SHELL_TIMEOUT = 3600  # Hard cap: 1 hour
+
+
 def execute_shell(command: str, timeout: int = 60, working_dir: str | None = None) -> str:
     """Execute a shell command and return output."""
+    timeout = max(1, min(timeout, MAX_SHELL_TIMEOUT))
     logger.info("shell: %s", command)
     try:
         result = subprocess.run(
@@ -251,10 +306,119 @@ def execute_http_request(
         return f"ERROR: {e}"
 
 
+def execute_notify(title: str, message: str, sound: bool = True) -> str:
+    """Send a native system notification."""
+    logger.info("notify: %s — %s", title, message)
+    system = platform.system()
+
+    try:
+        if system == "Darwin":
+            # Escape backslashes first, then double quotes for osascript
+            safe_title = title.replace("\\", "\\\\").replace('"', '\\"')
+            safe_message = message.replace("\\", "\\\\").replace('"', '\\"')
+            script = f'display notification "{safe_message}" with title "{safe_title}"'
+            if sound:
+                script += ' sound name "default"'
+            subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            return f"OK: Notification sent — {title}"
+
+        elif system == "Linux":
+            if not shutil.which("notify-send"):
+                return "ERROR: notify-send not found. Install libnotify-bin."
+            subprocess.run(
+                ["notify-send", title, message],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            return f"OK: Notification sent — {title}"
+
+        else:
+            return f"ERROR: Notifications not supported on {system}"
+
+    except subprocess.TimeoutExpired:
+        return "ERROR: Notification command timed out"
+    except Exception as e:
+        return f"ERROR: {e}"
+
+
+# --- Sensitive Data Redaction ---
+
+_SENSITIVE_HEADER_KEYS = frozenset({
+    "authorization", "x-api-key", "cookie", "set-cookie",
+    "proxy-authorization", "x-auth-token",
+})
+
+
+def _redact_tool_input(tool_name: str, tool_input: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of tool_input with sensitive values redacted for storage."""
+    redacted = dict(tool_input)
+    if tool_name == "http_request" and isinstance(redacted.get("headers"), dict):
+        redacted["headers"] = {
+            k: "[REDACTED]" if k.lower() in _SENSITIVE_HEADER_KEYS else v
+            for k, v in redacted["headers"].items()
+        }
+    return redacted
+
+
+# --- Network Access Control ---
+
+def check_egress_allowed(url: str, task: TaskConfig | None) -> str | None:
+    """Check if an HTTP request is allowed by the task's network policy.
+
+    Returns None if allowed, or an error message string if denied.
+
+    NOTE: This only restricts the http_request tool. Shell commands like
+    `curl` or `brew update` still have full network access because they
+    run as subprocesses. True network isolation would require OS-level
+    sandboxing (e.g., macOS sandbox-exec or Linux namespaces).
+    """
+    if task is None:
+        return None
+
+    if not task.network_access:
+        return (
+            "ERROR: Network access denied. "
+            "Set network_access = true in task config to allow HTTP requests."
+        )
+
+    if not task.egress_allowlist:
+        return None
+
+    parsed = urllib.parse.urlparse(url)
+    hostname = parsed.hostname or ""
+
+    for pattern in task.egress_allowlist:
+        if pattern == "*":
+            return None
+        if fnmatch.fnmatch(hostname, pattern):
+            return None
+
+    allowed = ", ".join(task.egress_allowlist)
+    return (
+        f"ERROR: Egress denied for host '{hostname}'. "
+        f"Allowed hosts: [{allowed}]"
+    )
+
+
 # --- Tool Dispatcher ---
 
-def dispatch_tool(tool_name: str, tool_input: dict[str, Any]) -> tuple[str, bool]:
-    """Dispatch a tool call and return (output, success)."""
+def dispatch_tool(
+    tool_name: str,
+    tool_input: dict[str, Any],
+    task: TaskConfig | None = None,
+) -> tuple[str, bool]:
+    """Dispatch a tool call and return (output, success).
+
+    The optional `task` parameter enables network access control for
+    http_request calls. When provided, the task's network_access and
+    egress_allowlist fields are checked before executing HTTP requests.
+    """
     try:
         if tool_name == "shell_execute":
             result = execute_shell(
@@ -283,6 +447,9 @@ def dispatch_tool(tool_name: str, tool_input: dict[str, Any]) -> tuple[str, bool
             return result, success
 
         elif tool_name == "http_request":
+            egress_error = check_egress_allowed(tool_input.get("url", ""), task)
+            if egress_error:
+                return egress_error, False
             result = execute_http_request(
                 url=tool_input["url"],
                 method=tool_input.get("method", "GET"),
@@ -290,6 +457,15 @@ def dispatch_tool(tool_name: str, tool_input: dict[str, Any]) -> tuple[str, bool
                 body=tool_input.get("body"),
             )
             success = not result.startswith("ERROR:")
+            return result, success
+
+        elif tool_name == "notify":
+            result = execute_notify(
+                title=tool_input["title"],
+                message=tool_input["message"],
+                sound=tool_input.get("sound", True),
+            )
+            success = result.startswith("OK:")
             return result, success
 
         else:
@@ -387,13 +563,13 @@ def run_task(
                             output = f"ERROR: Tool '{api_tool_name}' is not allowed for this task"
                             success = False
                         else:
-                            output, success = dispatch_tool(api_tool_name, block.input)
+                            output, success = dispatch_tool(api_tool_name, block.input, task=task)
 
                         tool_duration = int((time.monotonic() - tool_start) * 1000)
 
                         result.tool_calls.append(ToolCall(
                             tool_name=api_tool_name,
-                            input=block.input,
+                            input=_redact_tool_input(api_tool_name, block.input),
                             output=output[:2000],  # truncate for storage
                             duration_ms=tool_duration,
                             success=success,
@@ -472,6 +648,7 @@ def save_run(result: TaskResult, config: GlobalConfig) -> Path:
 
     with open(path, "w") as f:
         f.write(result.model_dump_json(indent=2))
+    os.chmod(path, 0o600)
 
     logger.debug("Saved run to %s", path)
     return path
