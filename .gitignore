@@ -1,10 +1,20 @@
 # Python-generated files
 __pycache__/
 *.py[oc]
+*.pyc
 build/
 dist/
 wheels/
 *.egg-info
 
 # Virtual environments
-.venv
+.venv/
+
+# Environment / secrets
+.env
+
+# Test cache
+.pytest_cache/
+
+# macOS
+.DS_Store
