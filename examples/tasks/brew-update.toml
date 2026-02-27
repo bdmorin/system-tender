@@ -1,0 +1,20 @@
+[task]
+name = "brew-update"
+description = "Update homebrew packages and report what changed"
+allowed_tools = ["shell", "file_read"]
+timeout = 300
+
+[task.prompt]
+text = """
+Update all homebrew packages. Steps:
+1. Run `brew update` to refresh the package index
+2. Run `brew outdated` to see what needs updating
+3. Run `brew upgrade` to update all packages
+4. Report: what was updated, what failed, and any caveats or warnings
+"""
+
+[output]
+format = "text"
+
+[schedule]
+cron = "0 6 * * *"

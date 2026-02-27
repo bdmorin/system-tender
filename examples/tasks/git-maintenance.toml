@@ -1,0 +1,20 @@
+[task]
+name = "git-maintenance"
+description = "Run git maintenance on development repositories"
+allowed_tools = ["shell", "file_read"]
+timeout = 180
+
+[task.prompt]
+text = """
+Find all git repositories under ~/cowork/ and run maintenance:
+1. For each repo, run `git gc --auto`
+2. Check for stale branches (merged but not deleted)
+3. Report repo sizes before and after
+4. Report any repos with uncommitted changes as a reminder
+"""
+
+[output]
+format = "text"
+
+[schedule]
+cron = "0 3 * * 0"

@@ -1,0 +1,20 @@
+[task]
+name = "disk-report"
+description = "Check disk usage and flag anything over 80%"
+allowed_tools = ["shell"]
+timeout = 60
+
+[task.prompt]
+text = """
+Check disk usage on all mounted volumes. Report:
+1. Each volume's usage percentage
+2. Flag any volume over 80% usage as WARNING
+3. Flag any volume over 95% usage as CRITICAL
+4. List the top 5 largest directories in the home folder
+"""
+
+[output]
+format = "text"
+
+[schedule]
+cron = "0 8 * * 1"
