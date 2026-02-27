@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -116,6 +117,7 @@ def init_config_dir(config_dir: Path | None = None) -> Path:
     """Initialize the config directory with example files."""
     config_dir = config_dir or DEFAULT_CONFIG_DIR
     config_dir.mkdir(parents=True, exist_ok=True)
+    os.chmod(config_dir, 0o700)
     (config_dir / "tasks").mkdir(exist_ok=True)
     (config_dir / "logs").mkdir(exist_ok=True)
     (config_dir / "runs").mkdir(exist_ok=True)
