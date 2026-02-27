@@ -52,6 +52,8 @@ class TestTaskConfig:
         assert t.output_format == OutputFormat.TEXT
         assert t.schedule is None
         assert t.env == {}
+        assert t.network_access is False
+        assert t.egress_allowlist == []
 
     def test_prompt_text_string(self):
         t = TaskConfig(name="x", prompt="do it")
@@ -72,6 +74,15 @@ class TestTaskConfig:
     def test_env_dict(self):
         t = TaskConfig(name="x", env={"FOO": "bar"})
         assert t.env["FOO"] == "bar"
+
+    def test_network_access_fields(self):
+        t = TaskConfig(
+            name="net",
+            network_access=True,
+            egress_allowlist=["api.github.com", "*.slack.com"],
+        )
+        assert t.network_access is True
+        assert t.egress_allowlist == ["api.github.com", "*.slack.com"]
 
 
 class TestGlobalConfig:

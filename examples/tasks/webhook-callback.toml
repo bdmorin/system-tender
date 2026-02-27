@@ -1,0 +1,26 @@
+# Webhook callback task with network access restricted to Slack.
+#
+# network_access = true enables the http_request tool.
+# egress_allowlist limits which hosts the tool can reach.
+# Wildcard patterns like "*.slack.com" are supported.
+
+[task]
+name = "webhook-callback"
+description = "Send task results to Slack via webhook"
+allowed_tools = ["shell", "file_read", "http_request"]
+timeout = 120
+network_access = true
+egress_allowlist = ["hooks.slack.com"]
+
+[task.prompt]
+text = """
+1. Read the latest run result from ~/.config/system-tender/runs/
+2. Summarize the result as a Slack message payload
+3. POST it to the Slack webhook URL in $SLACK_WEBHOOK_URL
+"""
+
+[env]
+SLACK_WEBHOOK_URL = "https://hooks.slack.com/services/REPLACE/WITH/REAL"
+
+[output]
+format = "text"

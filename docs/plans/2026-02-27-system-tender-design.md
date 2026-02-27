@@ -164,6 +164,33 @@ Tools are opt-in per task via the `allowed_tools` field. A task that only needs 
 
 system-tender runs with the permissions of the invoking user. It does not sudo, does not modify its own config, and does not install packages outside of what a task explicitly requests.
 
+### Network Access Restriction
+
+Tasks can control whether the `http_request` tool is allowed to make outbound requests, and which hosts it can reach.
+
+#### Configuration
+
+```toml
+[task]
+name = "webhook-callback"
+network_access = true
+egress_allowlist = ["hooks.slack.com", "*.github.com"]
+```
+
+- `network_access` (bool, default: `false`): When `false`, any `http_request` tool call is rejected with an error. When `true`, HTTP requests are allowed (subject to `egress_allowlist`).
+- `egress_allowlist` (list of strings, default: `[]`): When `network_access = true` and this list is non-empty, only requests to matching hosts are permitted. An empty list means all hosts are allowed. Supports:
+  - Exact hostnames: `"api.github.com"`
+  - Wildcard patterns: `"*.github.com"` (matches any subdomain)
+  - Universal wildcard: `"*"` (allow all hosts)
+
+#### Enforcement
+
+The check happens in `dispatch_tool` before the `http_request` tool executes. The Anthropic API call (control plane) is never restricted — only data-plane HTTP requests initiated by tool use are subject to the policy.
+
+#### Known Limitation
+
+Shell commands (`shell_execute`) are **not** restricted by the network access policy. Commands like `curl`, `wget`, `brew update`, or any other subprocess with network access will still work regardless of `network_access` setting. True network isolation would require OS-level sandboxing (macOS `sandbox-exec`, Linux network namespaces, or container isolation). This is a defense-in-depth layer for the `http_request` tool, not a network firewall.
+
 ## Logging Strategy
 
 ### Platform-Aware Logging

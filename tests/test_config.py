@@ -98,6 +98,38 @@ class TestLoadTaskConfig:
         task = load_task_config(task_file)
         assert task.env == {"MY_VAR": "hello", "OTHER": "world"}
 
+    def test_task_with_network_access(self, tmp_path):
+        data = {
+            "task": {
+                "name": "net-task",
+                "prompt": "call webhook",
+                "network_access": True,
+                "egress_allowlist": ["api.github.com", "*.slack.com"],
+            },
+        }
+        task_file = tmp_path / "net.toml"
+        with open(task_file, "wb") as f:
+            tomli_w.dump(data, f)
+
+        task = load_task_config(task_file)
+        assert task.network_access is True
+        assert task.egress_allowlist == ["api.github.com", "*.slack.com"]
+
+    def test_task_network_access_defaults(self, tmp_path):
+        data = {
+            "task": {
+                "name": "default-net",
+                "prompt": "test",
+            },
+        }
+        task_file = tmp_path / "default.toml"
+        with open(task_file, "wb") as f:
+            tomli_w.dump(data, f)
+
+        task = load_task_config(task_file)
+        assert task.network_access is False
+        assert task.egress_allowlist == []
+
     def test_task_structured_output(self, tmp_path):
         data = {
             "task": {

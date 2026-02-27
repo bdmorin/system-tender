@@ -1,0 +1,29 @@
+# Brew update task with network access restricted at the tool level.
+#
+# network_access = false means the http_request tool is blocked.
+# Shell commands like `brew update` still have network access — they
+# run as subprocesses and are not restricted by the egress policy.
+# This is a known limitation; true network isolation requires OS-level
+# sandboxing.
+
+[task]
+name = "brew-update-restricted"
+description = "Update homebrew packages (http_request tool disabled)"
+allowed_tools = ["shell", "file_read"]
+timeout = 300
+network_access = false
+
+[task.prompt]
+text = """
+Update all homebrew packages. Steps:
+1. Run `brew update` to refresh the package index
+2. Run `brew outdated` to see what needs updating
+3. Run `brew upgrade` to update all packages
+4. Report: what was updated, what failed, and any caveats or warnings
+"""
+
+[output]
+format = "text"
+
+[schedule]
+cron = "0 6 * * *"
